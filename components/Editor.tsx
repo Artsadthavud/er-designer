@@ -1,10 +1,13 @@
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { parseMagicText } from '../utils/magicParser';
+import { generateMockData, generateSQLInserts } from '../utils/mockDataGenerator';
+import { parseSQL } from '../utils/sqlParser';
 import { 
   Plus, Trash2, ChevronDown, ChevronRight, Layout, Code, 
   Key, Link, Search, Fingerprint, Ban, ShieldAlert, MessageSquareText, 
   X, RefreshCw, Database, ChevronsUpDown, GripVertical, Settings, 
   Image as ImageIcon, FolderOpen, Save, HelpCircle, BookOpen, Eraser, Play, AlertTriangle,
-  Undo, Redo, StickyNote, Sun, Moon, FileJson, FileCode, Copy, Sparkles, Wand2
+  Undo, Redo, StickyNote, Sun, Moon, FileJson, FileCode, Copy, Sparkles, Wand2, MonitorPlay, Replace
 } from 'lucide-react';
 import { DatabaseSchema, Table, Column, VisualConfig } from '../types';
 import { generatePrismaSchema, generateTypeORMEntries } from '../utils/exportUtils';
@@ -16,6 +19,12 @@ interface EditorProps {
   visualConfig?: VisualConfig;
   onVisualConfigChange?: (config: VisualConfig) => void;
   onExportImage?: () => void;
+  
+  // Import/Export/Project
+  onExport: () => void;
+  onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onReset?: () => void;
+
   // Undo/Redo
   canUndo?: boolean;
   canRedo?: boolean;
@@ -321,6 +330,7 @@ const ReferenceInput: React.FC<{ value: string; onChange: (val: string) => void;
 
 const Editor: React.FC<EditorProps> = ({ 
   schema, onSchemaChange, onForceLayout, visualConfig, onVisualConfigChange, onExportImage,
+  onExport, onImport, onReset,
   canUndo, canRedo, onUndo, onRedo, onAddNote, theme, onThemeChange
 }) => {
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set([schema.tables[0]?.name]));
@@ -333,6 +343,12 @@ const Editor: React.FC<EditorProps> = ({
   const [showMagic, setShowMagic] = useState(false);
   const [magicText, setMagicText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  
+  const [showMockModal, setShowMockModal] = useState(false);
+  const [mockRows, setMockRows] = useState(10);
+
+  const sqlInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleMagicImport = () => {
     const tables = parseMagicText(magicText);
@@ -407,6 +423,55 @@ const Editor: React.FC<EditorProps> = ({
     const newTables = [...schema.tables];
     newTables[index] = updatedTable;
     onSchemaChange(newTables);
+  };
+
+  const handleSQLImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const sql = e.target?.result as string;
+            const tables = parseSQL(sql);
+            if (tables.length > 0) {
+                onSchemaChange([...schema.tables, ...tables], true);
+                setImportError(null);
+            } else {
+                setImportError("No tables found in SQL file.");
+            }
+        } catch (err: any) {
+            setImportError("Failed to parse SQL: " + err.message);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  const handleGenerateMockData = (type: 'sql' | 'json') => {
+      const data = generateMockData(schema, mockRows);
+      
+      let content = '';
+      let mimeType = '';
+      let ext = '';
+      
+      if (type === 'json') {
+          content = JSON.stringify(data, null, 2);
+          mimeType = 'application/json';
+          ext = 'json';
+      } else {
+          content = generateSQLInserts(data);
+          mimeType = 'text/plain';
+          ext = 'sql';
+      }
+      
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.download = `mock_data.${ext}`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+      setShowMockModal(false);
   };
 
   const addTable = () => {
