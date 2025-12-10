@@ -1,5 +1,5 @@
-import { Node, Edge, MarkerType } from 'reactflow';
-import { DatabaseSchema, VisualConfig, Table } from '../types';
+import type { Node, Edge, MarkerType } from 'reactflow';
+import type { DatabaseSchema, VisualConfig, Table } from '../types';
 import { sanitizeId } from './idUtils';
 
 // Estimates the height of a table node based on its columns

@@ -1,0 +1,23 @@
+{
+  "tables": [
+    {
+      "name": "users",
+      "description": "Registered users",
+      "columns": [
+        { "name": "id", "type": "UUID", "isPrimaryKey": true, "nullable": false, "isUnique": true },
+        { "name": "username", "type": "VARCHAR(50)", "nullable": false, "isUnique": true },
+        { "name": "email", "type": "VARCHAR(255)", "nullable": false, "isUnique": true }
+      ]
+    },
+    {
+      "name": "posts",
+      "description": "Blog posts",
+      "columns": [
+        { "name": "id", "type": "SERIAL", "isPrimaryKey": true, "nullable": false, "isUnique": true },
+        { "name": "user_id", "type": "UUID", "isForeignKey": true, "references": "users.id", "relationType": "1:N" },
+        { "name": "title", "type": "VARCHAR(255)", "nullable": false },
+        { "name": "content", "type": "TEXT", "nullable": true }
+      ]
+    }
+  ]
+}

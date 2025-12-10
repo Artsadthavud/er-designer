@@ -315,7 +315,51 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
   const [searchQuery, setSearchQuery] = useState('');
   const [draggedCol, setDraggedCol] = useState<{tIdx: number, cIdx: number} | null>(null);
   const [confirmation, setConfirmation] = useState<{ message: string; onConfirm: () => void; } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Validate parsed JSON schema before importing
+  const validateParsedSchema = (parsed: any): { valid: boolean; errors: string[]; tables: any[] } => {
+    if (!parsed) return { valid: false, errors: ['Empty file or invalid JSON'], tables: [] };
+
+    // Accept either { tables: [...] } or an array of tables directly
+    let tables: any[] = [];
+    if (Array.isArray(parsed)) {
+      tables = parsed;
+    } else if (parsed && Array.isArray(parsed.tables)) {
+      tables = parsed.tables;
+    } else {
+      return { valid: false, errors: ["JSON must be an object with a 'tables' array or an array of table objects"], tables: [] };
+    }
+
+    const errors: string[] = [];
+    if (!Array.isArray(tables)) {
+      errors.push("'tables' must be an array");
+      return { valid: false, errors, tables: [] };
+    }
+
+    tables.forEach((t, ti) => {
+      if (!t || typeof t !== 'object') {
+        errors.push(`Table[${ti}] is not an object`);
+        return;
+      }
+      if (!t.name || typeof t.name !== 'string') errors.push(`Table[${ti}]: missing or invalid 'name'`);
+      if (!Array.isArray(t.columns)) {
+        errors.push(`Table[${ti}]: 'columns' must be an array`);
+      } else {
+        t.columns.forEach((c: any, ci: number) => {
+          if (!c || typeof c !== 'object') {
+            errors.push(`Table[${ti}].Column[${ci}] is not an object`);
+            return;
+          }
+          if (!c.name || typeof c.name !== 'string') errors.push(`Table[${ti}].Column[${ci}]: missing or invalid 'name'`);
+          if (!c.type || typeof c.type !== 'string') errors.push(`Table[${ti}].Column[${ci}]: missing or invalid 'type'`);
+        });
+      }
+    });
+
+    return { valid: errors.length === 0, errors, tables };
+  };
 
   // Auto-open help on first visit
   useEffect(() => {
@@ -402,18 +446,22 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
       try {
         const content = e.target?.result as string;
         const parsed = JSON.parse(content);
-        
-        // Basic validation
-        if (parsed && Array.isArray(parsed.tables)) {
-            onSchemaChange(parsed.tables, true); // Force layout on import
-        } else {
-            console.error("Invalid schema file: 'tables' array is missing.");
+
+        const { valid, errors, tables } = validateParsedSchema(parsed);
+        if (!valid) {
+          setImportError(errors.join('\n'));
+          return;
         }
-      } catch (err) {
-        console.error(err);
+
+        // Import is valid
+        onSchemaChange(tables, true); // Force layout on import
+        setImportError(null);
+      } catch (err: any) {
+        setImportError('Failed to parse JSON file: ' + (err?.message || String(err)));
       }
     };
     reader.readAsText(file);
+
     // Reset input value to allow re-importing the same file if needed
     event.target.value = '';
   };
@@ -1022,6 +1070,28 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
             </div>
         </div>
       )}
+
+        {/* Import Error Modal */}
+        {importError && (
+        <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-[100] flex items-center justify-center p-8 animate-in fade-in duration-200">
+          <div className="bg-surfaceLight w-full max-w-md rounded-xl shadow-2xl border border-border p-6 flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-slate-100">Import Error</h3>
+              <button onClick={() => setImportError(null)} className="text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="bg-[#0d1117] p-4 rounded text-xs text-slate-300 max-h-56 overflow-auto custom-scrollbar">
+              <pre className="whitespace-pre-wrap">{importError}</pre>
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setImportError(null)} className="px-4 py-2 bg-primary hover:bg-primaryHover text-white rounded text-sm">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+        )}
     </div>
   );
 };

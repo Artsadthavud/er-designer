@@ -170,6 +170,43 @@ export default function App() {
     setTooltip(data);
   }, []);
 
+  // Debounce scheduler for edge/layout recomputation to avoid repeated expensive updates
+  const refreshTimerRef = React.useRef<number | null>(null);
+  const lastEdgesKeyRef = React.useRef<string>('');
+
+  const getNodesPositionsKey = (nodesArr: Node[]) => {
+    return nodesArr.map(n => `${n.id}@${Math.round((n.position as any).x || 0)},${Math.round((n.position as any).y || 0)}`).join('|');
+  };
+
+  const scheduleRefreshEdges = (currentNodes: Node[], delay = 120) => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+
+    // Use window.setTimeout to get a numeric id compatible with DOM
+    refreshTimerRef.current = window.setTimeout(() => {
+      try {
+        const newEdges = generateEdges(schema.relationships, visualConfig, currentNodes);
+
+        // Create a lightweight key to determine if edges changed meaningfully
+        const edgesKey = newEdges.map(e => `${e.id}:${e.source}->${e.target}:${e.sourceHandle}:${e.targetHandle}`).join('|');
+        const nodesKey = getNodesPositionsKey(currentNodes);
+
+        const composedKey = `${nodesKey}||${edgesKey}`;
+        if (composedKey !== lastEdgesKeyRef.current) {
+          lastEdgesKeyRef.current = composedKey;
+          setEdges(newEdges);
+        }
+      } finally {
+        if (refreshTimerRef.current) {
+          clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = null;
+        }
+      }
+    }, delay) as unknown as number;
+  };
+
   // Initial Layout
   useEffect(() => {
     const { nodes: newNodes, edges: newEdges } = getLayoutedElements(schema, visualConfig);
@@ -177,19 +214,24 @@ export default function App() {
     const smartEdges = generateEdges(schema.relationships, visualConfig, newNodes);
     
     setNodes(newNodes.map(n => ({ ...n, data: { ...n.data, setTooltip: handleNodeTooltip } })));
+    // Use scheduled refresh to set edges (avoids hitting setEdges repeatedly if called in quick succession)
     setEdges(smartEdges);
   }, []); 
 
   // Re-calculate edges when nodes move (drag stop) or schema/config changes
-  const refreshEdges = (currentNodes: Node[]) => {
-      setEdges(generateEdges(schema.relationships, visualConfig, currentNodes));
-  };
+    const refreshEdges = (currentNodes: Node[]) => {
+      // immediate, non-debounced refresh (keeps existing API)
+      const newEdges = generateEdges(schema.relationships, visualConfig, currentNodes);
+      setEdges(newEdges);
+    };
 
   // Update edges when visual config changes, using current nodes state
   useEffect(() => {
      setEdges((eds) => {
         // We pass 'nodes' here. Note: if nodes are empty (first render), it defaults.
-        return generateEdges(schema.relationships, visualConfig, nodes);
+        // Use scheduled refresh to prevent repeated heavy recomputes
+        scheduleRefreshEdges(nodes);
+        return eds;
      });
   }, [visualConfig, schema.relationships]);
 
@@ -205,8 +247,9 @@ export default function App() {
   
     const onNodeDragStop = useCallback((event: React.MouseEvent, node: Node) => {
       // Recalculate edge paths based on the current nodes state or reactflow instance
-      const currentNodes = rfInstance?.getNodes ? (rfInstance.getNodes() as Node[]) : nodes;
-      refreshEdges(currentNodes);
+        const currentNodes = rfInstance?.getNodes ? (rfInstance.getNodes() as Node[]) : nodes;
+        // schedule a debounced refresh to avoid excessive recompute while dragging
+        scheduleRefreshEdges(currentNodes);
       setTooltip(null);
     }, [rfInstance, nodes, schema.relationships, visualConfig]);
 
