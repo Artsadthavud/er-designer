@@ -11,17 +11,21 @@ import ReactFlow, {
   ConnectionMode,
   MarkerType,
   ReactFlowInstance,
+  MiniMap
 } from 'reactflow';
 import { toPng } from 'html-to-image';
 import TableNode from './components/TableNode';
 import Editor from './components/Editor';
-import { DatabaseSchema, Relationship, Table, VisualConfig } from './types';
+import { DatabaseSchema, Relationship, Table, VisualConfig, Note as NoteType } from './types';
 import { getLayoutedElements } from './utils/layoutUtils';
 import { sanitizeId } from './utils/idUtils';
-import { Link } from 'lucide-react';
+import { useHistory } from './hooks/useHistory';
+import NoteNode from './components/NoteNode';
+import { Link, StickyNote } from 'lucide-react';
 
 const nodeTypes = {
   table: TableNode,
+  note: NoteNode,
 };
 
 // Default Visual Configuration
@@ -155,11 +159,22 @@ const initialTables: Table[] = [
 ];
 
 export default function App() {
-  const [schema, setSchema] = useState<DatabaseSchema>(() => ({
-      tables: initialTables,
-      relationships: extractRelationships(initialTables)
-  }));
   const [visualConfig, setVisualConfig] = useState<VisualConfig>(initialVisualConfig);
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+  // History State
+  const { 
+    state: schema, 
+    set: setSchema, 
+    undo, 
+    redo, 
+    canUndo, 
+    canRedo 
+  } = useHistory<DatabaseSchema>({
+      tables: initialTables,
+      relationships: extractRelationships(initialTables),
+      notes: []
+  });
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -207,23 +222,71 @@ export default function App() {
     }, delay) as unknown as number;
   };
 
-  // Initial Layout
+  // Initial Layout & Schema Sync
   useEffect(() => {
-    const { nodes: newNodes, edges: newEdges } = getLayoutedElements(schema, visualConfig);
-    // Apply initial smart routing based on layout positions
-    const smartEdges = generateEdges(schema.relationships, visualConfig, newNodes);
-    
-    setNodes(newNodes.map(n => ({ ...n, data: { ...n.data, setTooltip: handleNodeTooltip } })));
-    // Use scheduled refresh to set edges (avoids hitting setEdges repeatedly if called in quick succession)
-    setEdges(smartEdges);
-  }, []); 
+    // Merge layouted tables with notes
+    const { nodes: layoutedNodes } = getLayoutedElements(schema, visualConfig);
+    const noteNodes: Node[] = (schema.notes || []).map(note => ({
+      id: note.id,
+      type: 'note',
+      position: { x: note.x, y: note.y },
+      data: { 
+        ...note, 
+        onChange: (content: string) => updateNote(note.id, { content }),
+        onColorChange: (color: string) => updateNote(note.id, { color }),
+        onDelete: () => deleteNote(note.id)
+      },
+    }));
 
-  // Re-calculate edges when nodes move (drag stop) or schema/config changes
-    const refreshEdges = (currentNodes: Node[]) => {
-      // immediate, non-debounced refresh (keeps existing API)
-      const newEdges = generateEdges(schema.relationships, visualConfig, currentNodes);
-      setEdges(newEdges);
-    };
+    const allNodes = [...layoutedNodes, ...noteNodes];
+    // Apply initial smart routing based on layout positions
+    const smartEdges = generateEdges(schema.relationships, visualConfig, allNodes);
+    
+    setNodes(allNodes.map(n => {
+        if (n.type === 'table') {
+            return { ...n, data: { ...n.data, setTooltip: handleNodeTooltip } };
+        }
+        return n;
+    }));
+    setEdges(smartEdges);
+  }, [schema]); // Re-run when schema (history) changes
+
+  // Note Handlers
+  const addNote = useCallback(() => {
+      const id = `note-${Date.now()}`;
+      const newNote: NoteType = {
+          id,
+          content: '',
+          x: -100 + Math.random() * 50,
+          y: 100 + Math.random() * 50,
+          color: '#fef3c7'
+      };
+      setSchema({
+          ...schema,
+          notes: [...(schema.notes || []), newNote]
+      });
+  }, [schema, setSchema]);
+
+  const updateNote = useCallback((id: string, updates: Partial<NoteType>) => {
+      setSchema({
+          ...schema,
+          notes: (schema.notes || []).map(n => n.id === id ? { ...n, ...updates } : n)
+      });
+  }, [schema, setSchema]);
+
+  const deleteNote = useCallback((id: string) => {
+      setSchema({
+          ...schema,
+          notes: (schema.notes || []).filter(n => n.id !== id)
+      });
+  }, [schema, setSchema]);
+
+  // Theme Handler
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+    // Implement actual CSS/Class toggle if needed, or pass downward
+    // Assuming root class or CSS variables
+  }, []);
 
   // Update edges when visual config changes, using current nodes state
   useEffect(() => {
@@ -244,14 +307,37 @@ export default function App() {
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
-  
+
+  // Update logic to handle dragging notes persistence
     const onNodeDragStop = useCallback((event: React.MouseEvent, node: Node) => {
+      // If it's a note, save position to history
+      if (node.type === 'note') {
+          setSchema({
+              ...schema,
+              notes: (schema.notes || []).map(n => 
+                  n.id === node.id 
+                      ? { ...n, x: node.position.x, y: node.position.y }
+                      : n
+              )
+          });
+      }
+
       // Recalculate edge paths based on the current nodes state or reactflow instance
         const currentNodes = rfInstance?.getNodes ? (rfInstance.getNodes() as Node[]) : nodes;
         // schedule a debounced refresh to avoid excessive recompute while dragging
         scheduleRefreshEdges(currentNodes);
       setTooltip(null);
-    }, [rfInstance, nodes, schema.relationships, visualConfig]);
+    }, [rfInstance, nodes, schema, visualConfig, setSchema]); // Added schema/setSchema dependency
+
+    // No longer strictly need initial useEffect since [schema] dependency handles it, 
+    // but might keep a mount effect if we want force layout on load ONLY?
+    // Actually the above effect on [schema] covers everything: simple and robust for Undo/Redo.
+    // BUT we need to distinguish between "User dragged table" (visual only) vs "History changed table" (re-layout).
+    // Current approach: Schema change -> Re-layout Tables.
+    // This defines: Moving a Table is NOT stored in history (it resets on Undo/Redo or Schema change).
+    // Moving a Note IS stored in history.
+    // This is acceptable behavior for "Auto-Layout" driven diagram.
+
 
   const onEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
       if (!edge.data) return;
@@ -282,48 +368,14 @@ export default function App() {
 
   const handleSchemaUpdate = (newTables: Table[], shouldLayout = false) => {
     const newRelationships = extractRelationships(newTables);
-    const newSchema = { tables: newTables, relationships: newRelationships };
+    // Preserve existing notes
+    const newSchema = { 
+        tables: newTables, 
+        relationships: newRelationships,
+        notes: schema.notes || []
+    };
     setSchema(newSchema);
-
-    if (shouldLayout) {
-        // Full re-layout
-        const { nodes: layoutedNodes } = getLayoutedElements(newSchema, visualConfig);
-        const smartEdges = generateEdges(newRelationships, visualConfig, layoutedNodes);
-        
-        setNodes(layoutedNodes.map(n => ({ ...n, data: { ...n.data, setTooltip: handleNodeTooltip } })));
-        setEdges(smartEdges);
-        
-        setTimeout(() => {
-            if (rfInstance) {
-                rfInstance.fitView({ duration: 800, padding: 0.2 });
-            }
-        }, 50);
-    } else {
-        // Minor updates: preserve positions, just update data
-        setNodes((currentNodes) => {
-          const updatedNodes = newTables.map((table, index) => {
-            const safeId = sanitizeId(table.name);
-            const existingNode = currentNodes.find((n) => n.id === safeId);
-            const dataWithTooltip = { ...table, setTooltip: handleNodeTooltip };
-                
-            if (existingNode) {
-              return { ...existingNode, data: dataWithTooltip };
-            }
-            // New table default pos
-            return {
-              id: safeId,
-              type: 'table',
-              position: { x: 50 + (index % 3) * 400, y: 50 + Math.floor(index / 3) * 450 }, 
-              data: dataWithTooltip,
-            };
-          });
-            // Recalc edges based on current node positions
-            const smartEdges = generateEdges(newRelationships, visualConfig, updatedNodes);
-            setEdges(smartEdges);
-
-            return updatedNodes;
-        });
-    }
+    // Layout and everything else handled by the useEffect([schema])
   };
 
   const handleForceLayout = () => {
@@ -371,6 +423,14 @@ export default function App() {
             visualConfig={visualConfig}
             onVisualConfigChange={setVisualConfig}
             onExportImage={handleExportImage}
+            // New Features
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+            onAddNote={addNote}
+            theme={theme}
+            onThemeChange={toggleTheme}
         />
       </div>
 
@@ -393,8 +453,14 @@ export default function App() {
           onNodeDragStart={() => setTooltip(null)}
           onMoveStart={() => setTooltip(null)}
         >
-          <Background color="#1e293b" gap={20} size={1} />
+          <Background color={theme === 'dark' ? "#1e293b" : "#e2e8f0"} gap={20} size={1} />
           <Controls className="!bg-surfaceLight !border-border !fill-slate-300" />
+          <MiniMap 
+            nodeStrokeColor="#334155" 
+            nodeColor="#0f172a" 
+            maskColor="rgba(0, 0, 0, 0.2)"
+            className="!bg-surfaceLight/80 !border-border rounded-lg overflow-hidden" 
+          />
         </ReactFlow>
 
         {/* Floating Tooltip */}

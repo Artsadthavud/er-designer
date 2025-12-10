@@ -1,11 +1,13 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { parseMagicText } from '../utils/magicParser';
 import { 
   Plus, Trash2, ChevronDown, ChevronRight, Layout, Code, 
   Key, Link, Search, Fingerprint, Ban, ShieldAlert, MessageSquareText, 
   X, RefreshCw, Database, ChevronsUpDown, GripVertical, Settings, 
-  Image as ImageIcon, FolderOpen, Save, HelpCircle, BookOpen, Eraser, Play, AlertTriangle
+  Image as ImageIcon, FolderOpen, Save, HelpCircle, BookOpen, Eraser, Play, AlertTriangle,
+  Undo, Redo, StickyNote, Sun, Moon, FileJson, FileCode, Copy, Sparkles, Wand2
 } from 'lucide-react';
 import { DatabaseSchema, Table, Column, VisualConfig } from '../types';
+import { generatePrismaSchema, generateTypeORMEntries } from '../utils/exportUtils';
 
 interface EditorProps {
   schema: DatabaseSchema;
@@ -14,6 +16,16 @@ interface EditorProps {
   visualConfig?: VisualConfig;
   onVisualConfigChange?: (config: VisualConfig) => void;
   onExportImage?: () => void;
+  // Undo/Redo
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  // Notes
+  onAddNote?: () => void;
+  // Theme
+  theme?: 'light' | 'dark';
+  onThemeChange?: () => void;
 }
 
 // Types Configuration
@@ -307,7 +319,10 @@ const ReferenceInput: React.FC<{ value: string; onChange: (val: string) => void;
 
 // --- Main Editor Component ---
 
-const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, visualConfig, onVisualConfigChange, onExportImage }) => {
+const Editor: React.FC<EditorProps> = ({ 
+  schema, onSchemaChange, onForceLayout, visualConfig, onVisualConfigChange, onExportImage,
+  canUndo, canRedo, onUndo, onRedo, onAddNote, theme, onThemeChange
+}) => {
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set([schema.tables[0]?.name]));
   const [showSql, setShowSql] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -315,8 +330,19 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
   const [searchQuery, setSearchQuery] = useState('');
   const [draggedCol, setDraggedCol] = useState<{tIdx: number, cIdx: number} | null>(null);
   const [confirmation, setConfirmation] = useState<{ message: string; onConfirm: () => void; } | null>(null);
+  const [showMagic, setShowMagic] = useState(false);
+  const [magicText, setMagicText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleMagicImport = () => {
+    const tables = parseMagicText(magicText);
+    if (tables.length > 0) {
+        onSchemaChange([...schema.tables, ...tables], true);
+        setShowMagic(false);
+        setMagicText('');
+        setExpandedTables(new Set([...expandedTables, ...tables.map(t => t.name)]));
+    }
+  };
 
   // Validate parsed JSON schema before importing
   const validateParsedSchema = (parsed: any): { valid: boolean; errors: string[]; tables: any[] } => {
@@ -400,6 +426,60 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
     setSearchQuery(''); 
   };
 
+  const duplicateTable = (e: React.MouseEvent, tIdx: number) => {
+    e.stopPropagation();
+    const tableToClone = schema.tables[tIdx];
+    let newName = `${tableToClone.name}_copy`;
+    // Ensure unique name
+    let counter = 1;
+    while(schema.tables.some(t => t.name === newName)) {
+        newName = `${tableToClone.name}_copy_${counter}`;
+        counter++;
+    }
+
+    const newTable: Table = {
+        ...JSON.parse(JSON.stringify(tableToClone)),
+        name: newName
+    };
+    
+    // Insert after current table or at end
+    const newTables = [...schema.tables];
+    newTables.splice(tIdx + 1, 0, newTable);
+    onSchemaChange(newTables);
+    setExpandedTables(new Set([...expandedTables, newName]));
+  };
+
+  const addPresetColumns = (tIdx: number, type: 'timestamps' | 'uuid_pk' | 'soft_delete') => {
+      const table = schema.tables[tIdx];
+      let newCols = [...table.columns];
+
+      if (type === 'timestamps') {
+          if (!newCols.some(c => c.name === 'created_at')) {
+              newCols.push({ name: 'created_at', type: 'TIMESTAMP', nullable: false, comment: 'now()' });
+          }
+          if (!newCols.some(c => c.name === 'updated_at')) {
+              newCols.push({ name: 'updated_at', type: 'TIMESTAMP', nullable: false, comment: 'now()' });
+          }
+      } else if (type === 'soft_delete') {
+          if (!newCols.some(c => c.name === 'deleted_at')) {
+              newCols.push({ name: 'deleted_at', type: 'TIMESTAMP', nullable: true });
+          }
+      } else if (type === 'uuid_pk') {
+          // Remove existing PK if any
+          newCols = newCols.map(c => ({ ...c, isPrimaryKey: false }));
+          // Check if id exists
+          const idIdx = newCols.findIndex(c => c.name === 'id');
+          const idCol = { name: 'id', type: 'UUID', isPrimaryKey: true, nullable: false, isUnique: true };
+          if (idIdx >= 0) {
+              newCols[idIdx] = idCol;
+          } else {
+              newCols.unshift(idCol);
+          }
+      }
+
+      updateTable(tIdx, { ...table, columns: newCols });
+  };
+
   const loadTemplate = (templateName: string) => {
     setConfirmation({
         message: `Load "${templateName}" template? This will replace your current schema.`,
@@ -435,6 +515,26 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportPrisma = () => {
+      const content = generatePrismaSchema(schema);
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = 'schema.prisma';
+      link.href = url;
+      link.click();
+  };
+
+  const handleExportTypeORM = () => {
+      const content = generateTypeORMEntries(schema);
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = 'entities.ts';
+      link.href = url;
+      link.click();
   };
 
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -534,7 +634,34 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
           </div>
           <span className="font-bold text-sm tracking-wide">DB Architect</span>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
+             {/* History Controls */}
+             <div className="flex bg-slate-800/50 rounded-md mr-2">
+                <button 
+                    onClick={onUndo} disabled={!canUndo}
+                    className={`p-2 rounded-l-md transition-colors ${!canUndo ? 'text-slate-600 cursor-not-allowed' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`} 
+                    title="Undo (Ctrl+Z)"
+                >
+                    <Undo size={16} />
+                </button>
+                <div className="w-px bg-slate-700 my-1"></div>
+                <button 
+                    onClick={onRedo} disabled={!canRedo} 
+                    className={`p-2 rounded-r-md transition-colors ${!canRedo ? 'text-slate-600 cursor-not-allowed' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`} 
+                    title="Redo (Ctrl+Y)"
+                >
+                    <Redo size={16} />
+                </button>
+             </div>
+
+             <div className="h-6 w-px bg-border mx-1"></div>
+
+             <button onClick={onAddNote} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors" title="Add Sticky Note">
+                <StickyNote size={16} />
+             </button>
+             <button onClick={() => setShowMagic(!showMagic)} className={`p-2 rounded-md transition-colors ${showMagic ? 'bg-purple-500/20 text-purple-400' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`} title="Magic Table (Quick Add)">
+                <Wand2 size={16} />
+             </button>
              <button onClick={onForceLayout} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors" title="Auto Layout">
                 <Layout size={16} />
              </button>
@@ -557,8 +684,19 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
              <button onClick={handleExport} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors" title="Export Schema (JSON)">
                 <Save size={16} />
              </button>
+             <div className="h-6 w-px bg-border mx-1"></div>
+             <button onClick={handleExportPrisma} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-primary transition-colors" title="Export to Prisma">
+                <FileJson size={16} />
+             </button>
+             <button onClick={handleExportTypeORM} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-blue-400 transition-colors" title="Export to TypeORM">
+                <FileCode size={16} />
+             </button>
+             <div className="h-6 w-px bg-border mx-1"></div>
              <button onClick={() => setShowSql(!showSql)} className={`p-2 rounded-md transition-colors ${showSql ? 'bg-primary/20 text-primary' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`} title="View SQL">
                 <Code size={16} />
+             </button>
+             <button onClick={onThemeChange} className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors" title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}>
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
              </button>
              <button onClick={() => setShowHelp(true)} className={`p-2 rounded-md transition-colors ${showHelp ? 'bg-primary/20 text-primary' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`} title="Help & Guide">
                 <HelpCircle size={16} />
@@ -607,16 +745,37 @@ const Editor: React.FC<EditorProps> = ({ schema, onSchemaChange, onForceLayout, 
                             className="bg-transparent text-sm font-semibold text-slate-200 focus:outline-none focus:text-primary transition-colors flex-1"
                         />
                         <button 
+                            onClick={(e) => duplicateTable(e, tIdx)}
+                            className="text-slate-600 hover:text-blue-400 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Duplicate Table"
+                        >
+                            <Copy size={14} />
+                        </button>
+                        <button 
                             onClick={(e) => { e.stopPropagation(); const n = [...schema.tables]; n.splice(tIdx, 1); onSchemaChange(n); }}
                             className="text-slate-600 hover:text-red-400 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Delete Table"
                         >
                             <Trash2 size={14} />
                         </button>
                     </div>
 
-                    {/* Columns List */}
-                    {isExpanded && (
+                     {/* Columns List */}
+                     {isExpanded && (
                         <div className="p-3 pt-0 border-t border-border/50 bg-slate-900/30">
+                            {/* Preset Toolbar */}
+                            <div className="flex gap-2 mb-2 mt-2 pt-2 border-t border-slate-800/50 justify-end">
+                                <button onClick={() => addPresetColumns(tIdx, 'uuid_pk')} className="text-[10px] flex items-center gap-1 text-slate-500 hover:text-primary px-2 py-1 bg-slate-950 rounded border border-slate-800 hover:border-primary/50 transition-colors">
+                                    <Sparkles size={10} /> UUID PK
+                                </button>
+                                <button onClick={() => addPresetColumns(tIdx, 'timestamps')} className="text-[10px] flex items-center gap-1 text-slate-500 hover:text-primary px-2 py-1 bg-slate-950 rounded border border-slate-800 hover:border-primary/50 transition-colors">
+                                    <Sparkles size={10} /> Timestamps
+                                </button>
+                                <button onClick={() => addPresetColumns(tIdx, 'soft_delete')} className="text-[10px] flex items-center gap-1 text-slate-500 hover:text-primary px-2 py-1 bg-slate-950 rounded border border-slate-800 hover:border-primary/50 transition-colors">
+                                    <Sparkles size={10} /> Soft Delete
+                                </button>
+                            </div>
+
                             {/* Table Description */}
                             <div className="mt-3 px-1">
                                 <textarea

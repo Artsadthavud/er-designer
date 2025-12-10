@@ -30,9 +30,18 @@ export interface Relationship {
   label?: string;
 }
 
+export interface Note {
+  id: string;
+  content: string;
+  x: number;
+  y: number;
+  color?: string;
+}
+
 export interface DatabaseSchema {
   tables: Table[];
   relationships: Relationship[];
+  notes?: Note[];
 }
 
 export interface VisualConfig {
