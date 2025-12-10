@@ -1,5 +1,6 @@
 import { Node, Edge, MarkerType } from 'reactflow';
 import { DatabaseSchema, VisualConfig, Table } from '../types';
+import { sanitizeId } from './idUtils';
 
 // Estimates the height of a table node based on its columns
 const estimateHeight = (table: Table) => {
@@ -84,14 +85,14 @@ export const getLayoutedElements = (schema: DatabaseSchema, config: VisualConfig
           if (h > maxRowHeight) maxRowHeight = h;
 
           nodes.push({
-              id: table.name,
-              type: 'table',
-              position: { 
-                  x: startX + colIndex * (NODE_WIDTH + HORIZONTAL_SPACING), 
-                  y: currentY 
-              },
-              data: table,
-          });
+                  id: sanitizeId(table.name),
+                  type: 'table',
+                  position: { 
+                      x: startX + colIndex * (NODE_WIDTH + HORIZONTAL_SPACING), 
+                      y: currentY 
+                  },
+                  data: table,
+              });
       });
 
       // Move Y down for the next row

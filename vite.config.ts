@@ -11,8 +11,7 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       // Do not expose secret API keys to the client bundle.
-      // Any server-side environment variables (e.g. GEMINI_API_KEY) should be
-      // consumed by a backend/proxy and not injected here.
+      // Any server-side secrets should be consumed by a backend/proxy and not injected here.
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { Table, Column } from '../types';
+import { sanitizeId } from '../utils/idUtils';
 import { Key, Link, Fingerprint, ShieldAlert, Info, Hash, MessageSquareText } from 'lucide-react';
 
 interface TableNodeProps {
@@ -110,14 +111,14 @@ const TableNode: React.FC<TableNodeProps> = ({ data }) => {
                 <Handle 
                     type="target" 
                     position={Position.Left} 
-                    id={`target-left-${col.name}`}
+                    id={`target-left-${sanitizeId(col.name)}`}
                     className="!w-1 !h-1 !bg-slate-400 !border-none opacity-0 group-hover/row:opacity-100 transition-opacity"
                     style={{ left: -1, top: '50%' }} 
                 />
                  <Handle 
                     type="source" 
                     position={Position.Left} 
-                    id={`source-left-${col.name}`}
+                    id={`source-left-${sanitizeId(col.name)}`}
                     className="!w-1 !h-1 !bg-primary !border-none opacity-0 group-hover/row:opacity-100 transition-opacity"
                     style={{ left: -1, top: '50%' }} 
                 />
@@ -158,14 +159,14 @@ const TableNode: React.FC<TableNodeProps> = ({ data }) => {
                 <Handle 
                     type="source" 
                     position={Position.Right} 
-                    id={`source-right-${col.name}`}
+                    id={`source-right-${sanitizeId(col.name)}`}
                     className="!w-1 !h-1 !bg-primary !border-none opacity-0 group-hover/row:opacity-100 transition-opacity"
                     style={{ right: -1, top: '50%' }} 
                 />
                 <Handle 
                     type="target" 
                     position={Position.Right} 
-                    id={`target-right-${col.name}`}
+                    id={`target-right-${sanitizeId(col.name)}`}
                     className="!w-1 !h-1 !bg-slate-400 !border-none opacity-0 group-hover/row:opacity-100 transition-opacity"
                     style={{ right: -1, top: '50%' }} 
                 />

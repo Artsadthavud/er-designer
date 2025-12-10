@@ -17,6 +17,7 @@ import TableNode from './components/TableNode';
 import Editor from './components/Editor';
 import { DatabaseSchema, Relationship, Table, VisualConfig } from './types';
 import { getLayoutedElements } from './utils/layoutUtils';
+import { sanitizeId } from './utils/idUtils';
 import { Link } from 'lucide-react';
 
 const nodeTypes = {
@@ -59,14 +60,16 @@ const extractRelationships = (tables: Table[]): Relationship[] => {
 };
 
 // Helper to generate edges with smart handle selection
-const generateEdges = (relationships: Relationship[], visualConfig: VisualConfig, nodes: Node[]): Edge[] => {
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+const generateEdges = (relationships: Relationship[], visualConfig: VisualConfig, nodes: Node[] = []): Edge[] => {
+  if (!nodes || nodes.length === 0) return [];
 
-    return relationships.map((rel, index) => {
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  return relationships.map((rel, index) => {
         const color = visualConfig.relationshipColors[rel.type as keyof typeof visualConfig.relationshipColors] || visualConfig.relationshipColors.default;
         
-        const sourceNode = nodeMap.get(rel.fromTable);
-        const targetNode = nodeMap.get(rel.toTable);
+    const sourceNode = nodeMap.get(sanitizeId(rel.fromTable));
+    const targetNode = nodeMap.get(sanitizeId(rel.toTable));
 
         // Default to standard Left-to-Right flow
         let sourceSide = 'right';
@@ -100,11 +103,11 @@ const generateEdges = (relationships: Relationship[], visualConfig: VisualConfig
         }
 
         return {
-            id: `e-${rel.fromTable}-${rel.toTable}-${index}`,
-            source: rel.fromTable,
-            target: rel.toTable,
-            sourceHandle: `source-${sourceSide}-${rel.fromColumn}`,
-            targetHandle: `target-${targetSide}-${rel.toColumn}`,
+          id: `e-${sanitizeId(rel.fromTable)}-${sanitizeId(rel.toTable)}-${index}`,
+          source: sanitizeId(rel.fromTable),
+          target: sanitizeId(rel.toTable),
+          sourceHandle: `source-${sourceSide}-${sanitizeId(rel.fromColumn)}`,
+          targetHandle: `target-${targetSide}-${sanitizeId(rel.toColumn)}`,
             label: rel.label ? `${rel.label} (${rel.type})` : rel.type,
             data: rel,
             animated: true, // Enable "running" dashed line animation
@@ -200,11 +203,12 @@ export default function App() {
     []
   );
   
-  const onNodeDragStop = useCallback((event: React.MouseEvent, node: Node, nodes: Node[]) => {
-      // Recalculate edge paths based on new positions
-      refreshEdges(nodes);
+    const onNodeDragStop = useCallback((event: React.MouseEvent, node: Node) => {
+      // Recalculate edge paths based on the current nodes state or reactflow instance
+      const currentNodes = rfInstance?.getNodes ? (rfInstance.getNodes() as Node[]) : nodes;
+      refreshEdges(currentNodes);
       setTooltip(null);
-  }, [schema.relationships, visualConfig]);
+    }, [rfInstance, nodes, schema.relationships, visualConfig]);
 
   const onEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
       if (!edge.data) return;
@@ -254,21 +258,22 @@ export default function App() {
     } else {
         // Minor updates: preserve positions, just update data
         setNodes((currentNodes) => {
-            const updatedNodes = newTables.map((table, index) => {
-                const existingNode = currentNodes.find((n) => n.id === table.name);
-                const dataWithTooltip = { ...table, setTooltip: handleNodeTooltip };
+          const updatedNodes = newTables.map((table, index) => {
+            const safeId = sanitizeId(table.name);
+            const existingNode = currentNodes.find((n) => n.id === safeId);
+            const dataWithTooltip = { ...table, setTooltip: handleNodeTooltip };
                 
-                if (existingNode) {
-                    return { ...existingNode, data: dataWithTooltip };
-                }
-                // New table default pos
-                return {
-                    id: table.name,
-                    type: 'table',
-                    position: { x: 50 + (index % 3) * 400, y: 50 + Math.floor(index / 3) * 450 }, 
-                    data: dataWithTooltip,
-                };
-            });
+            if (existingNode) {
+              return { ...existingNode, data: dataWithTooltip };
+            }
+            // New table default pos
+            return {
+              id: safeId,
+              type: 'table',
+              position: { x: 50 + (index % 3) * 400, y: 50 + Math.floor(index / 3) * 450 }, 
+              data: dataWithTooltip,
+            };
+          });
             // Recalc edges based on current node positions
             const smartEdges = generateEdges(newRelationships, visualConfig, updatedNodes);
             setEdges(smartEdges);
