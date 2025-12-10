@@ -1,0 +1,5 @@
+{
+  "name": "DB Architect",
+  "description": "A manual database schema designer that visualizes your custom tables and columns into interactive Entity-Relationship (ER) diagrams.",
+  "requestFramePermissions": []
+}
